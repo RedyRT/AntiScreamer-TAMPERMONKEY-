@@ -25,11 +25,36 @@
     window.resizeTo = function() { };
     window.focus = function() { };
 
-    // 3. БЛОКИРОВКА ВСПОМОГАТЕЛЬНЫХ ОКОН (Popups)
+// 3. БЛОКИРОВКА ВСПОМОГАТЕЛЬНЫХ ОКОН (Popups) - УСИЛЕННАЯ УМНАЯ ВЕРСИЯ
     const originalOpen = window.open;
-    window.open = function() {
-        showGuardianAlert("Попытка открытия Popup окна");
-        return { focus: () => {}, resizeTo: () => {}, moveTo: () => {}, location: { href: "" } };
+    let lastPopupTime = 0;
+
+    window.open = function(url, target, features) {
+        const now = Date.now();
+
+        // Защита 1: Блокируем клонирование самого себя (главный трюк этого скримера)
+        // Скример передает location.href или пустую строку
+        if (url === location.href || url === window.location.pathname || !url) {
+            showGuardianAlert("Заблокирован спам-клон текущего окна");
+            // Возвращаем пустышку, чтобы его w.resizeTo и w.moveTo не выдали ошибку и не сломали скрипт
+            return { focus: () => {}, resizeTo: () => {}, moveTo: () => {}, location: { href: "" }, close: () => {} };
+        }
+
+        // Защита 2: Лимит на открытие (не больше 1 окна в секунду)
+        if (now - lastPopupTime < 1000) {
+            console.warn("[Shield] Заблокирован спам окнами (слишком часто)");
+            return { focus: () => {}, resizeTo: () => {}, moveTo: () => {}, location: { href: "" }, close: () => {} };
+        }
+
+        // Защита 3: Разрешаем окно, если был реальный клик (нужно для Ozon)
+        if (window.event && window.event.isTrusted) {
+            lastPopupTime = now;
+            return originalOpen.apply(this, arguments);
+        }
+
+        // Если сайт пытается открыть окно сам по себе в фоне без клика
+        showGuardianAlert("Попытка скрытого открытия Popup окна");
+        return { focus: () => {}, resizeTo: () => {}, moveTo: () => {}, location: { href: "" }, close: () => {} };
     };
 
     // 4. ЗАЩИТА ОТ УДЕРЖАНИЯ (beforeunload)
@@ -80,7 +105,7 @@
             </style>
         `;
         shadow.appendChild(ui);
-        shadow.querySelector('.close-btn').onclick = () => { window.location.href = "about:blank"; };
+        shadow.querySelector('.close-btn').onclick = () => { window.location.href = "http://www.google.com/"; };
     }
 
     // 6. УМНАЯ ОЧИСТКА (ДОБАВЛЕНЫ СЕЛЕКТОРЫ НОВОГО СКРИМЕРА)
@@ -276,5 +301,34 @@
         }
     };
     initBgObserver();
+
+    // 17. МОМЕНТАЛЬНАЯ ГЛУШИЛКА ПРЕДЗАГРУЖЕННЫХ МЕДИА (Fix для новых вкладок)
+    const silenceExistingMedia = () => {
+        // Ищем все аудио и видео на странице
+        const media = document.querySelectorAll('audio, video');
+        media.forEach(m => {
+            const source = m.src || (m.querySelector('source') && m.querySelector('source').src) || "";
+            // Если в ссылке есть подозрительные слова
+            if (source.includes('boo') || source.includes('scary') || source.includes('sounds') || source.includes('mp3')) {
+                m.muted = true; // Сначала мутим
+                m.pause();      // Останавливаем
+                m.src = "";     // Удаляем источник
+                m.remove();     // Удаляем из DOM
+                showGuardianAlert("Вшитый звук скримера обезврежен!");
+            }
+        });
+    };
+
+    // Запускаем проверку каждые 10мс в начале загрузки, чтобы опередить автоплей
+    const fastScanner = setInterval(silenceExistingMedia, 10);
+
+    // Останавливаем сканер через 5 секунд (когда страница точно загрузилась)
+    setTimeout(() => clearInterval(fastScanner), 5000);
+
+    // Также блокируем изменение стилей (против мигания и вылетов)
+    if (document.documentElement) {
+        const observer = new MutationObserver(silenceExistingMedia);
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+    }
 
 })();
